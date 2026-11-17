@@ -203,8 +203,80 @@ export interface ChecklistItem {
   userAction?: ChecklistUserAction;
 }
 
+export type ExtractionConfidence = 'high' | 'needs_review' | 'unreadable' | 'missing';
+
+export type ExtractionFieldStatus =
+  | 'extracted'
+  | 'inferred'
+  | 'missing'
+  | 'unreadable'
+  | 'not_applicable'
+  | 'rejected'
+  | 'accepted';
+
+export interface DocumentExtractedField {
+  key: string;
+  label: string;
+  value: string;
+  normalizedValue?: string;
+  originalText?: string;
+  pageNumber?: number;
+  confidence: ExtractionConfidence;
+  status: ExtractionFieldStatus;
+  statedOrInferred: 'stated' | 'inferred';
+  warning?: string;
+  mapsTo?:
+    | 'document.title'
+    | 'document.documentType'
+    | 'document.issuingAuthority'
+    | 'document.referenceNumber'
+    | 'document.issueDate'
+    | 'document.expiryDate'
+    | 'document.relatedProductOrScope'
+    | 'document.countryOfIssue'
+    | 'document.category'
+    | 'business.name'
+    | 'business.city'
+    | 'business.country'
+    | 'business.industry'
+    | 'business.businessType'
+    | 'profile.legalStructure'
+    | 'experience.clientOrContractingOrg'
+    | 'experience.projectOrContractTitle'
+    | 'experience.completionDate'
+    | 'experience.natureOfDelivery'
+    | 'experience.issuingOrganisation';
+}
+
+export interface DocumentDiscrepancy {
+  fieldKey: string;
+  label: string;
+  extractedValue: string;
+  existingValue: string;
+  severity: 'info' | 'warning' | 'critical';
+  message: string;
+}
+
+export interface DocumentProfileProposal {
+  target: 'business' | 'profile' | 'experience';
+  field: string;
+  label: string;
+  proposedValue: string;
+  existingValue?: string;
+  sourceFieldKey: string;
+  overwritePolicy: 'fill_if_empty' | 'requires_confirmation';
+}
+
 export interface DocumentAiExtraction {
   detectedDocumentType: string;
+  documentFamily?:
+    | 'business_registration'
+    | 'tax'
+    | 'product_certification'
+    | 'import_export'
+    | 'experience'
+    | 'licence'
+    | 'other';
   extractedTitle: string;
   extractedIssuingAuthority: string;
   extractedIssueDate?: string;
@@ -212,14 +284,42 @@ export interface DocumentAiExtraction {
   extractedReferenceNumber?: string;
   relatedBusinessOrProduct?: string;
   extractedBusinessName?: string;
+  issuingCountry?: string;
   businessNameMatchesProfile: boolean;
+  fields: DocumentExtractedField[];
+  extractionWarnings: string[];
   completenessIssues: string[];
   expiryWarnings: string[];
+  pageCountEstimate?: number;
+  unreadPages: number[];
+  suggestedChecklistRuleId?: string;
+  suggestedChecklistRuleName?: string;
+  documentPurposeSummary?: string;
+  supportsChecklistItems: string[];
+  suggestedOtherDocuments: string[];
+  profileProposals: DocumentProfileProposal[];
+  discrepancies: DocumentDiscrepancy[];
+  processingStatus:
+    | 'reading'
+    | 'identifying'
+    | 'extracting'
+    | 'comparing'
+    | 'ready_for_review'
+    | 'failed';
   flaggedForHumanReview: boolean;
   reviewFlagReasons: string[];
   disclaimer: string;
   confirmedByUser: boolean;
   analyzedAt: string;
+  ocrMethod:
+    | 'tradesquare_pdf_text'
+    | 'tradesquare_tesseract'
+    | 'tradesquare_hybrid'
+    | 'tradesquare_unreadable'
+    | 'gemini_multimodal';
+  modelUsed: string;
+  /** Truncated OCR text used for admission / authenticity checks. */
+  sourceTextExcerpt?: string;
 }
 
 export interface UploadedDocumentRecord {
@@ -239,6 +339,8 @@ export interface UploadedDocumentRecord {
   fileName: string;
   mimeType: string;
   fileSizeBytes: number;
+  /** SHA-256 of file bytes — used to block exact duplicate uploads. */
+  contentHash?: string;
   status: DocumentStatus;
   aiAnalysis?: DocumentAiExtraction;
   uploadedAt: string;

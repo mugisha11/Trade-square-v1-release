@@ -28,6 +28,12 @@ import {
   validateAndSaveBase64Document,
 } from './server/compliance/documentStorage';
 import {
+  deleteBusinessMedia,
+  readBusinessMedia,
+  saveBusinessMedia,
+  type BusinessMediaKind,
+} from './server/businessMedia';
+import {
   buildPersonalisedChecklist,
   buildReadinessSummary,
   computeEffectiveDocumentStatus,
@@ -37,6 +43,12 @@ import {
   analyzeUploadedDocumentWithAi,
   answerComplianceQuestionWithAi,
 } from './server/compliance/aiComplianceService';
+import {
+  evaluateDocumentAdmission,
+  mapDocumentFieldsFromExtraction,
+} from './server/compliance/documentIntelligence';
+import { resolveExtractionProfile } from './server/compliance/extractionProfiles';
+import { runTradeSquareOpportunityAssist } from './server/opportunityAssist';
 
 dotenv.config();
 
@@ -71,9 +83,12 @@ interface StoredBusiness {
   targetMarkets: string[];
   requirements: string;
   logoUrl?: string;
+  coverUrl?: string;
   verifiedRecord: boolean;
   updatedAt: string;
 }
+
+type OpportunityStatus = 'draft' | 'published' | 'paused' | 'closed' | 'fulfilled';
 
 interface StoredOpportunity {
   id: string;
@@ -87,8 +102,131 @@ interface StoredOpportunity {
   deadline?: string;
   industry: string;
   createdAt: string;
+  updatedAt?: string;
+  publishedAt?: string;
+  status: OpportunityStatus;
+  technicalSpecs?: string;
+  qualityRequirements?: string;
+  quantity?: string;
+  unit?: string;
+  capacity?: string;
+  moq?: string;
+  budgetOrPrice?: string;
+  currency?: string;
+  paymentTerms?: string;
+  priceNegotiable?: boolean;
+  originLocation?: string;
+  deliveryTimeline?: string;
+  requiredCertifications?: string;
+  eligibilityRequirements?: string;
+  preferredPartnerTraits?: string;
+  contactPreference?: string;
+  showPublicContact?: boolean;
   savedByUserIds: string[];
   interestedUserIds: string[];
+}
+
+function opportunityStatusOf(opp: StoredOpportunity): OpportunityStatus {
+  return opp.status ?? 'published';
+}
+
+function optionalTrimmed(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function applyOpportunityFields(
+  target: StoredOpportunity,
+  body: Record<string, unknown>,
+  defaults?: { industry?: string },
+): void {
+  if (typeof body.type === 'string' && body.type.trim()) target.type = body.type.trim();
+  if (typeof body.productOrService === 'string') target.productOrService = body.productOrService.trim();
+  if (typeof body.description === 'string') target.description = body.description.trim();
+  if ('quantityAndSpecs' in body) target.quantityAndSpecs = optionalTrimmed(body.quantityAndSpecs);
+  if ('destinationMarket' in body) target.destinationMarket = optionalTrimmed(body.destinationMarket);
+  if ('deadline' in body) target.deadline = optionalTrimmed(body.deadline);
+  if (typeof body.industry === 'string' && body.industry.trim()) {
+    target.industry = body.industry.trim();
+  } else if (!target.industry && defaults?.industry) {
+    target.industry = defaults.industry;
+  }
+  if ('technicalSpecs' in body) target.technicalSpecs = optionalTrimmed(body.technicalSpecs);
+  if ('qualityRequirements' in body) {
+    target.qualityRequirements = optionalTrimmed(body.qualityRequirements);
+  }
+  if ('quantity' in body) target.quantity = optionalTrimmed(body.quantity);
+  if ('unit' in body) target.unit = optionalTrimmed(body.unit);
+  if ('capacity' in body) target.capacity = optionalTrimmed(body.capacity);
+  if ('moq' in body) target.moq = optionalTrimmed(body.moq);
+  if ('budgetOrPrice' in body) target.budgetOrPrice = optionalTrimmed(body.budgetOrPrice);
+  if ('currency' in body) target.currency = optionalTrimmed(body.currency);
+  if ('paymentTerms' in body) target.paymentTerms = optionalTrimmed(body.paymentTerms);
+  if (typeof body.priceNegotiable === 'boolean') target.priceNegotiable = body.priceNegotiable;
+  if ('originLocation' in body) target.originLocation = optionalTrimmed(body.originLocation);
+  if ('deliveryTimeline' in body) target.deliveryTimeline = optionalTrimmed(body.deliveryTimeline);
+  if ('requiredCertifications' in body) {
+    target.requiredCertifications = optionalTrimmed(body.requiredCertifications);
+  }
+  if ('eligibilityRequirements' in body) {
+    target.eligibilityRequirements = optionalTrimmed(body.eligibilityRequirements);
+  }
+  if ('preferredPartnerTraits' in body) {
+    target.preferredPartnerTraits = optionalTrimmed(body.preferredPartnerTraits);
+  }
+  if ('contactPreference' in body) {
+    target.contactPreference = optionalTrimmed(body.contactPreference);
+  }
+  if (typeof body.showPublicContact === 'boolean') {
+    target.showPublicContact = body.showPublicContact;
+  }
+  target.updatedAt = new Date().toISOString();
+}
+
+function serializeOpportunity(
+  opp: StoredOpportunity,
+  userId: string,
+  business?: StoredBusiness | null,
+) {
+  const biz = business ?? store.businesses.find((b) => b.id === opp.businessId) ?? null;
+  return {
+    id: opp.id,
+    businessId: opp.businessId,
+    businessName: biz?.name ?? 'Registered Enterprise',
+    businessLocation: biz ? [biz.city, biz.country].filter(Boolean).join(', ') : 'East Africa',
+    businessLogoUrl: biz?.logoUrl,
+    verifiedRecord: Boolean(biz?.verifiedRecord),
+    type: opp.type,
+    productOrService: opp.productOrService,
+    description: opp.description,
+    quantityAndSpecs: opp.quantityAndSpecs,
+    destinationMarket: opp.destinationMarket,
+    deadline: opp.deadline,
+    industry: opp.industry,
+    createdAt: opp.createdAt,
+    updatedAt: opp.updatedAt,
+    publishedAt: opp.publishedAt,
+    status: opportunityStatusOf(opp),
+    technicalSpecs: opp.technicalSpecs,
+    qualityRequirements: opp.qualityRequirements,
+    quantity: opp.quantity,
+    unit: opp.unit,
+    capacity: opp.capacity,
+    moq: opp.moq,
+    budgetOrPrice: opp.budgetOrPrice,
+    currency: opp.currency,
+    paymentTerms: opp.paymentTerms,
+    priceNegotiable: opp.priceNegotiable,
+    originLocation: opp.originLocation,
+    deliveryTimeline: opp.deliveryTimeline,
+    requiredCertifications: opp.requiredCertifications,
+    eligibilityRequirements: opp.eligibilityRequirements,
+    preferredPartnerTraits: opp.preferredPartnerTraits,
+    contactPreference: opp.contactPreference,
+    showPublicContact: opp.showPublicContact,
+    savedByMe: opp.savedByUserIds.includes(userId),
+    interestExpressedByMe: opp.interestedUserIds.includes(userId),
+    isOwnOpportunity: opp.ownerUserId === userId,
+  };
 }
 
 interface StoredEnquiry {
@@ -176,10 +314,16 @@ function loadStore(): StoreState {
     if (fs.existsSync(STORE_PATH)) {
       const raw = fs.readFileSync(STORE_PATH, 'utf-8');
       const parsed = JSON.parse(raw) as Partial<StoreState>;
+      const opportunities = (parsed.opportunities ?? []).map((opp) => ({
+        ...opp,
+        status: (opp.status ?? 'published') as OpportunityStatus,
+        savedByUserIds: opp.savedByUserIds ?? [],
+        interestedUserIds: opp.interestedUserIds ?? [],
+      }));
       return {
         users: parsed.users ?? [],
         businesses: parsed.businesses ?? [],
-        opportunities: parsed.opportunities ?? [],
+        opportunities,
         enquiries: parsed.enquiries ?? [],
         threads: parsed.threads ?? [],
         activities: parsed.activities ?? [],
@@ -309,8 +453,35 @@ function sanitizeUser(user: StoredUser) {
 
 function sanitizeComplianceDocument(doc: StoredComplianceDocument): UploadedDocumentRecord {
   const { storageKey: _removed, ...rest } = doc;
+  const ai = rest.aiAnalysis
+    ? {
+        ...rest.aiAnalysis,
+        fields: Array.isArray(rest.aiAnalysis.fields) ? rest.aiAnalysis.fields : [],
+        extractionWarnings: Array.isArray(rest.aiAnalysis.extractionWarnings)
+          ? rest.aiAnalysis.extractionWarnings
+          : [],
+        unreadPages: Array.isArray(rest.aiAnalysis.unreadPages) ? rest.aiAnalysis.unreadPages : [],
+        supportsChecklistItems: Array.isArray(rest.aiAnalysis.supportsChecklistItems)
+          ? rest.aiAnalysis.supportsChecklistItems
+          : [],
+        suggestedOtherDocuments: Array.isArray(rest.aiAnalysis.suggestedOtherDocuments)
+          ? rest.aiAnalysis.suggestedOtherDocuments
+          : [],
+        profileProposals: Array.isArray(rest.aiAnalysis.profileProposals)
+          ? rest.aiAnalysis.profileProposals
+          : [],
+        discrepancies: Array.isArray(rest.aiAnalysis.discrepancies)
+          ? rest.aiAnalysis.discrepancies
+          : [],
+        processingStatus: rest.aiAnalysis.processingStatus || 'ready_for_review',
+        ocrMethod: rest.aiAnalysis.ocrMethod || 'tradesquare_pdf_text',
+        modelUsed: rest.aiAnalysis.modelUsed || 'tradesquare-docintel-v1',
+        sourceTextExcerpt: rest.aiAnalysis.sourceTextExcerpt,
+      }
+    : undefined;
   return {
     ...rest,
+    aiAnalysis: ai,
     status: computeEffectiveDocumentStatus(rest),
   };
 }
@@ -897,6 +1068,95 @@ async function startServer() {
     res.json({ business });
   });
 
+  app.post('/api/business/me/media', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    const business = getBusinessForUser(user.id);
+    if (!business) {
+      res.status(404).json({ error: 'Business profile not found.' });
+      return;
+    }
+
+    const { kind, mimeType, base64Content } = req.body ?? {};
+    if (kind !== 'logo' && kind !== 'cover') {
+      res.status(400).json({ error: 'Upload kind must be logo or cover.' });
+      return;
+    }
+    if (!base64Content || typeof base64Content !== 'string' || !mimeType || typeof mimeType !== 'string') {
+      res.status(400).json({ error: 'Please select a valid JPG, PNG, or WebP image.' });
+      return;
+    }
+
+    try {
+      const saved = saveBusinessMedia({
+        businessId: business.id,
+        kind: kind as BusinessMediaKind,
+        base64Content,
+        mimeType,
+      });
+      if (kind === 'logo') {
+        business.logoUrl = saved.publicUrl;
+      } else {
+        business.coverUrl = saved.publicUrl;
+      }
+      business.updatedAt = new Date().toISOString();
+      saveStore();
+      res.json({ business });
+    } catch (err: unknown) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Unable to upload image.',
+      });
+    }
+  });
+
+  app.delete('/api/business/me/media/:kind', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    const business = getBusinessForUser(user.id);
+    if (!business) {
+      res.status(404).json({ error: 'Business profile not found.' });
+      return;
+    }
+
+    const kind = req.params.kind;
+    if (kind !== 'logo' && kind !== 'cover') {
+      res.status(400).json({ error: 'Media kind must be logo or cover.' });
+      return;
+    }
+
+    deleteBusinessMedia(business.id, kind);
+    if (kind === 'logo') {
+      delete business.logoUrl;
+    } else {
+      delete business.coverUrl;
+    }
+    business.updatedAt = new Date().toISOString();
+    saveStore();
+    res.json({ business });
+  });
+
+  app.get('/api/business/:businessId/media/:kind', (req, res) => {
+    const kind = req.params.kind;
+    if (kind !== 'logo' && kind !== 'cover') {
+      res.status(400).json({ error: 'Media kind must be logo or cover.' });
+      return;
+    }
+    const media = readBusinessMedia(req.params.businessId, kind);
+    if (!media) {
+      res.status(404).json({ error: 'Image not found.' });
+      return;
+    }
+    res.setHeader('Content-Type', media.mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(media.buffer);
+  });
+
   // =========================================================================
   // OPPORTUNITIES FEED, SAVING, INTEREST & PUBLISHING
   // =========================================================================
@@ -910,11 +1170,20 @@ async function startServer() {
     const typeFilter = typeof req.query.type === 'string' ? req.query.type : '';
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
     const scope = typeof req.query.scope === 'string' ? req.query.scope : 'all';
+    const statusFilter = typeof req.query.status === 'string' ? req.query.status : '';
 
     const enriched = store.opportunities
       .filter((opp) => {
-        if (scope === 'saved' && !opp.savedByUserIds.includes(user.id)) return false;
-        if (scope === 'mine' && opp.ownerUserId !== user.id) return false;
+        const status = opportunityStatusOf(opp);
+        if (scope === 'saved') {
+          if (!opp.savedByUserIds.includes(user.id) || status !== 'published') return false;
+        } else if (scope === 'mine') {
+          if (opp.ownerUserId !== user.id) return false;
+        } else {
+          // Public discovery feed: published only
+          if (status !== 'published') return false;
+        }
+        if (statusFilter && status !== statusFilter) return false;
         if (typeFilter && typeFilter !== 'All' && opp.type !== typeFilter) return false;
         if (q) {
           const biz = store.businesses.find((b) => b.id === opp.businessId);
@@ -924,6 +1193,7 @@ async function startServer() {
             opp.type,
             opp.industry,
             opp.destinationMarket ?? '',
+            opp.originLocation ?? '',
             biz?.name ?? '',
             biz?.country ?? '',
             biz?.city ?? '',
@@ -935,30 +1205,28 @@ async function startServer() {
         return true;
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .map((opp) => {
-        const biz = store.businesses.find((b) => b.id === opp.businessId);
-        return {
-          id: opp.id,
-          businessId: opp.businessId,
-          businessName: biz?.name ?? 'Registered Enterprise',
-          businessLocation: biz ? [biz.city, biz.country].filter(Boolean).join(', ') : 'East Africa',
-          businessLogoUrl: biz?.logoUrl,
-          verifiedRecord: Boolean(biz?.verifiedRecord),
-          type: opp.type,
-          productOrService: opp.productOrService,
-          description: opp.description,
-          quantityAndSpecs: opp.quantityAndSpecs,
-          destinationMarket: opp.destinationMarket,
-          deadline: opp.deadline,
-          industry: opp.industry,
-          createdAt: opp.createdAt,
-          savedByMe: opp.savedByUserIds.includes(user.id),
-          interestExpressedByMe: opp.interestedUserIds.includes(user.id),
-          isOwnOpportunity: opp.ownerUserId === user.id,
-        };
-      });
+      .map((opp) => serializeOpportunity(opp, user.id));
 
     res.json({ opportunities: enriched });
+  });
+
+  app.get('/api/opportunities/:id', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    const opp = store.opportunities.find((o) => o.id === req.params.id);
+    if (!opp) {
+      res.status(404).json({ error: 'Opportunity not found.' });
+      return;
+    }
+    const status = opportunityStatusOf(opp);
+    if (status !== 'published' && opp.ownerUserId !== user.id) {
+      res.status(404).json({ error: 'Opportunity not found.' });
+      return;
+    }
+    res.json({ opportunity: serializeOpportunity(opp, user.id) });
   });
 
   app.post('/api/opportunities', (req, res) => {
@@ -973,67 +1241,169 @@ async function startServer() {
       return;
     }
 
-    const { type, productOrService, description, quantityAndSpecs, destinationMarket, deadline, industry } =
-      req.body ?? {};
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const publishNow = body.publish === true || body.status === 'published';
+    const status: OpportunityStatus = publishNow ? 'published' : 'draft';
 
-    if (!productOrService || typeof productOrService !== 'string' || productOrService.trim().length < 3) {
-      res.status(400).json({ error: 'Please enter a product or service title.' });
+    const productOrService =
+      typeof body.productOrService === 'string' ? body.productOrService.trim() : '';
+    const description = typeof body.description === 'string' ? body.description.trim() : '';
+
+    if (status === 'published') {
+      if (productOrService.length < 3) {
+        res.status(400).json({ error: 'Please enter an opportunity title (at least 3 characters).' });
+        return;
+      }
+      if (description.length < 10) {
+        res.status(400).json({ error: 'Please provide a clear description (at least 10 characters).' });
+        return;
+      }
+    } else if (!productOrService && !description && !body.type) {
+      res.status(400).json({ error: 'Draft needs at least a type or title to save.' });
       return;
     }
-    if (!description || typeof description !== 'string' || description.trim().length < 10) {
-      res.status(400).json({ error: 'Please provide a clear description (at least 10 characters).' });
-      return;
-    }
 
+    const now = new Date().toISOString();
     const opp: StoredOpportunity = {
       id: `opp_${crypto.randomUUID()}`,
       ownerUserId: user.id,
       businessId: business.id,
-      type: typeof type === 'string' && type.trim() ? type.trim() : 'Buyer Request',
-      productOrService: productOrService.trim(),
-      description: description.trim(),
-      quantityAndSpecs:
-        typeof quantityAndSpecs === 'string' && quantityAndSpecs.trim()
-          ? quantityAndSpecs.trim()
-          : undefined,
-      destinationMarket:
-        typeof destinationMarket === 'string' && destinationMarket.trim()
-          ? destinationMarket.trim()
-          : undefined,
-      deadline:
-        typeof deadline === 'string' && deadline.trim() ? deadline.trim() : undefined,
-      industry:
-        typeof industry === 'string' && industry.trim() ? industry.trim() : business.industry,
-      createdAt: new Date().toISOString(),
+      type: typeof body.type === 'string' && body.type.trim() ? body.type.trim() : 'Buyer Request',
+      productOrService: productOrService || 'Untitled draft',
+      description: description || '',
+      industry: business.industry,
+      createdAt: now,
+      updatedAt: now,
+      publishedAt: status === 'published' ? now : undefined,
+      status,
       savedByUserIds: [],
       interestedUserIds: [],
     };
+    applyOpportunityFields(opp, body, { industry: business.industry });
+    if (!opp.productOrService.trim()) opp.productOrService = 'Untitled draft';
+    opp.status = status;
+    if (status === 'published') opp.publishedAt = now;
 
     store.opportunities.push(opp);
-    store.activities.unshift({
-      id: `act_${crypto.randomUUID()}`,
-      userId: user.id,
-      kind: 'response',
-      title: `Published ${opp.type}: ${opp.productOrService}`,
-      detail: `Visible to businesses discovering opportunities in ${opp.industry}.`,
-      createdAt: opp.createdAt,
-      relatedPage: 'opportunities',
-      relatedId: opp.id,
-    });
+    if (status === 'published') {
+      store.activities.unshift({
+        id: `act_${crypto.randomUUID()}`,
+        userId: user.id,
+        kind: 'response',
+        title: `Published ${opp.type}: ${opp.productOrService}`,
+        detail: `Visible to businesses discovering opportunities in ${opp.industry}.`,
+        createdAt: now,
+        relatedPage: 'opportunities',
+        relatedId: opp.id,
+      });
+    }
     saveStore();
 
     res.status(201).json({
-      opportunity: {
-        ...opp,
-        businessName: business.name,
-        businessLocation: [business.city, business.country].filter(Boolean).join(', '),
-        businessLogoUrl: business.logoUrl,
-        verifiedRecord: business.verifiedRecord,
-        savedByMe: false,
-        interestExpressedByMe: false,
-        isOwnOpportunity: true,
-      },
+      opportunity: serializeOpportunity(opp, user.id, business),
     });
+  });
+
+  app.patch('/api/opportunities/:id', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    const opp = store.opportunities.find((o) => o.id === req.params.id);
+    if (!opp) {
+      res.status(404).json({ error: 'Opportunity not found.' });
+      return;
+    }
+    if (opp.ownerUserId !== user.id) {
+      res.status(403).json({ error: 'You can only manage opportunities you own.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const business = getBusinessForUser(user.id);
+    applyOpportunityFields(opp, body, { industry: business?.industry });
+
+    const requestedStatus = typeof body.status === 'string' ? body.status : undefined;
+    const publishFlag = body.publish === true;
+    const previousStatus = opportunityStatusOf(opp);
+
+    if (publishFlag || requestedStatus === 'published') {
+      if (!opp.productOrService || opp.productOrService.trim().length < 3 || opp.productOrService === 'Untitled draft') {
+        res.status(400).json({ error: 'Please enter an opportunity title before publishing.' });
+        return;
+      }
+      if (!opp.description || opp.description.trim().length < 10) {
+        res.status(400).json({ error: 'Please provide a clear description before publishing.' });
+        return;
+      }
+      opp.status = 'published';
+      if (!opp.publishedAt) opp.publishedAt = new Date().toISOString();
+    } else if (
+      requestedStatus === 'draft' ||
+      requestedStatus === 'paused' ||
+      requestedStatus === 'closed' ||
+      requestedStatus === 'fulfilled'
+    ) {
+      opp.status = requestedStatus;
+    }
+
+    if (opp.status === 'published' && previousStatus !== 'published') {
+      store.activities.unshift({
+        id: `act_${crypto.randomUUID()}`,
+        userId: user.id,
+        kind: 'response',
+        title: `Published ${opp.type}: ${opp.productOrService}`,
+        detail: `Visible to businesses discovering opportunities in ${opp.industry}.`,
+        createdAt: new Date().toISOString(),
+        relatedPage: 'opportunities',
+        relatedId: opp.id,
+      });
+    }
+
+    saveStore();
+    res.json({ opportunity: serializeOpportunity(opp, user.id, business) });
+  });
+
+  app.post('/api/opportunities/assist', (req, res) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    const body = req.body ?? {};
+    const mode = typeof body.mode === 'string' ? body.mode : 'extract';
+    const naturalLanguage =
+      typeof body.naturalLanguage === 'string' ? body.naturalLanguage.trim() : '';
+    const opportunity =
+      body.opportunity && typeof body.opportunity === 'object'
+        ? (body.opportunity as Record<string, unknown>)
+        : {};
+    const targetLanguage =
+      typeof body.targetLanguage === 'string' ? body.targetLanguage.trim() : 'English';
+
+    if (mode === 'extract' && naturalLanguage.length < 12) {
+      res.status(400).json({
+        error:
+          'Describe the opportunity in a few sentences so TradeSquare Opportunity Intelligence can extract structured fields.',
+      });
+      return;
+    }
+
+    try {
+      const result = runTradeSquareOpportunityAssist({
+        mode,
+        naturalLanguage,
+        opportunity,
+        targetLanguage,
+      });
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Opportunity assistant unavailable.',
+      });
+    }
   });
 
   app.post('/api/opportunities/:id/save', (req, res) => {
@@ -1931,23 +2301,27 @@ async function startServer() {
       mimeType,
       base64Content,
       submitForReview,
+      smartUpload,
     } = req.body ?? {};
 
-    if (!title || typeof title !== 'string' || title.trim().length < 2) {
-      res.status(400).json({ error: 'Please provide a document title.' });
-      return;
-    }
-    if (!documentType || typeof documentType !== 'string' || !documentType.trim()) {
-      res.status(400).json({ error: 'Please specify the document type.' });
-      return;
-    }
-    if (!issuingAuthority || typeof issuingAuthority !== 'string' || !issuingAuthority.trim()) {
-      res.status(400).json({ error: 'Please specify the issuing authority or organisation.' });
-      return;
-    }
+    const isSmartUpload = Boolean(smartUpload);
     if (!base64Content || typeof base64Content !== 'string' || !mimeType || typeof mimeType !== 'string') {
       res.status(400).json({ error: 'Please select a valid PDF, JPG, JPEG, or PNG file to upload.' });
       return;
+    }
+    if (!isSmartUpload) {
+      if (!title || typeof title !== 'string' || title.trim().length < 2) {
+        res.status(400).json({ error: 'Please provide a document title.' });
+        return;
+      }
+      if (!documentType || typeof documentType !== 'string' || !documentType.trim()) {
+        res.status(400).json({ error: 'Please specify the document type.' });
+        return;
+      }
+      if (!issuingAuthority || typeof issuingAuthority !== 'string' || !issuingAuthority.trim()) {
+        res.status(400).json({ error: 'Please specify the issuing authority or organisation.' });
+        return;
+      }
     }
 
     try {
@@ -1961,6 +2335,32 @@ async function startServer() {
       const now = new Date().toISOString();
       // Uploaded documents start as 'Uploaded' or 'Pending review' — NEVER auto-Verified
       const initialStatus: DocumentStatus = submitForReview ? 'Pending review' : 'Uploaded';
+      const inferredName =
+        typeof fileName === 'string' && fileName.trim()
+          ? fileName.replace(/\.[^.]+$/, '').trim()
+          : 'Uploaded document';
+      const resolvedTitle =
+        typeof title === 'string' && title.trim().length >= 2 ? title.trim() : inferredName || 'Uploaded document';
+      const resolvedType =
+        typeof documentType === 'string' && documentType.trim()
+          ? documentType.trim()
+          : 'Pending AI identification';
+      const resolvedAuthority =
+        typeof issuingAuthority === 'string' && issuingAuthority.trim()
+          ? issuingAuthority.trim()
+          : 'Pending AI identification';
+
+      const duplicateByHash = store.complianceDocuments.find(
+        (d) => d.businessId === business.id && d.contentHash && d.contentHash === savedFile.contentHash
+      );
+      if (duplicateByHash) {
+        deleteStoredDocumentFile(business.id, savedFile.storageKey);
+        res.status(409).json({
+          error: `Duplicate upload blocked. This exact file was already uploaded as “${duplicateByHash.title}”.`,
+          code: 'duplicate',
+        });
+        return;
+      }
 
       const newDoc: StoredComplianceDocument = {
         id: `doc_${crypto.randomUUID()}`,
@@ -1969,10 +2369,10 @@ async function startServer() {
           typeof checklistRuleId === 'string' && checklistRuleId.trim()
             ? checklistRuleId.trim()
             : undefined,
-        documentType: documentType.trim(),
+        documentType: resolvedType,
         category: (category as DocumentCategory) || 'BUSINESS_REGISTRATION',
-        title: title.trim(),
-        issuingAuthority: issuingAuthority.trim(),
+        title: resolvedTitle,
+        issuingAuthority: resolvedAuthority,
         referenceNumber:
           typeof referenceNumber === 'string' && referenceNumber.trim()
             ? referenceNumber.trim()
@@ -1993,6 +2393,7 @@ async function startServer() {
         fileName: typeof fileName === 'string' && fileName.trim() ? fileName.trim() : `upload${savedFile.mimeType === 'application/pdf' ? '.pdf' : '.jpg'}`,
         mimeType: savedFile.mimeType,
         fileSizeBytes: savedFile.fileSizeBytes,
+        contentHash: savedFile.contentHash,
         status: initialStatus,
         storageKey: savedFile.storageKey,
         uploadedAt: now,
@@ -2149,16 +2550,70 @@ async function startServer() {
 
     try {
       const profile = getOrCreateComplianceProfile(business);
+      const workspacePreview = buildComplianceWorkspaceForBusiness(business);
       const extraction = await analyzeUploadedDocumentWithAi({
         fileBuffer: buffer,
         mimeType: doc.mimeType,
         fileName: doc.fileName,
         documentRecord: sanitizeComplianceDocument(doc),
         businessName: business.name,
+        businessCountry: business.country,
+        businessCity: business.city,
+        businessIndustry: business.industry,
         profile,
+        checklist: workspacePreview.checklist,
+        existingDocuments: workspacePreview.documents,
       });
 
+      const admission = evaluateDocumentAdmission({
+        businessName: business.name,
+        candidate: sanitizeComplianceDocument(doc),
+        extraction,
+        existingDocuments: workspacePreview.documents,
+      });
+
+      if (!admission.allowed) {
+        // Remove rejected upload so it never stays in the vault
+        const idx = store.complianceDocuments.findIndex((d) => d.id === doc.id);
+        if (idx >= 0) {
+          const [removed] = store.complianceDocuments.splice(idx, 1);
+          deleteStoredDocumentFile(business.id, removed.storageKey);
+          saveStore();
+        }
+        const status =
+          admission.code === 'duplicate'
+            ? 409
+            : admission.code === 'not_a_certificate' ||
+                admission.code === 'unrelated_business' ||
+                admission.code === 'not_understood'
+              ? 422
+              : 400;
+        res.status(status).json({
+          error: admission.reason,
+          code: admission.code,
+          denied: true,
+          workspace: buildComplianceWorkspaceForBusiness(business),
+        });
+        return;
+      }
+
       doc.aiAnalysis = extraction;
+      // Soft-fill provisional metadata for smart uploads without confirming profile changes
+      if (doc.documentType === 'Pending AI identification' && extraction.detectedDocumentType) {
+        doc.documentType = extraction.detectedDocumentType;
+      }
+      if (doc.issuingAuthority === 'Pending AI identification' && extraction.extractedIssuingAuthority) {
+        doc.issuingAuthority = extraction.extractedIssuingAuthority;
+      }
+      if (extraction.documentFamily) {
+        const familyProfile = resolveExtractionProfile({
+          detectedType: extraction.detectedDocumentType,
+          title: extraction.extractedTitle,
+          authority: extraction.extractedIssuingAuthority,
+          fileName: doc.fileName,
+        });
+        doc.category = familyProfile.category;
+      }
       doc.updatedAt = new Date().toISOString();
       saveStore();
 
@@ -2168,23 +2623,8 @@ async function startServer() {
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unable to analyze document right now.';
-      const isKeyError =
-        message.includes('API_KEY') ||
-        message.includes('PERMISSION_DENIED') ||
-        message.includes('403') ||
-        message.includes('configured');
-      const status = isKeyError
-        ? 503
-        : message.includes('429') || message.includes('RESOURCE_EXHAUSTED')
-          ? 429
-          : 500;
-      res.status(status).json({
-        error:
-          status === 503
-            ? 'AI document analysis requires a valid GEMINI_API_KEY configured in Settings > Secrets.'
-            : status === 429
-              ? 'AI rate limit reached. Please try again in a moment.'
-              : message,
+      res.status(500).json({
+        error: `TradeSquare Document Intelligence failed: ${message}`,
       });
     }
   });
@@ -2208,27 +2648,165 @@ async function startServer() {
       res.status(404).json({ error: 'Document not found or access denied.' });
       return;
     }
+    if (!doc.aiAnalysis) {
+      res.status(400).json({ error: 'No AI extraction is available to confirm for this document.' });
+      return;
+    }
 
     const body = req.body ?? {};
-    if (typeof body.title === 'string' && body.title.trim()) doc.title = body.title.trim();
-    if (typeof body.documentType === 'string' && body.documentType.trim()) doc.documentType = body.documentType.trim();
-    if (typeof body.issuingAuthority === 'string' && body.issuingAuthority.trim()) doc.issuingAuthority = body.issuingAuthority.trim();
-    if (typeof body.referenceNumber === 'string') doc.referenceNumber = body.referenceNumber.trim() || undefined;
-    if (typeof body.issueDate === 'string') doc.issueDate = body.issueDate.trim() || undefined;
-    if (typeof body.expiryDate === 'string') doc.expiryDate = body.expiryDate.trim() || undefined;
-    if (typeof body.relatedProductOrScope === 'string') doc.relatedProductOrScope = body.relatedProductOrScope.trim() || undefined;
+    const acceptedFieldKeys: string[] = Array.isArray(body.acceptedFieldKeys)
+      ? body.acceptedFieldKeys.map((k: unknown) => String(k))
+      : doc.aiAnalysis.fields
+          .filter((f) => f.confidence === 'high' && f.value.trim())
+          .map((f) => f.key);
 
-    if (doc.aiAnalysis) {
-      doc.aiAnalysis = {
-        ...doc.aiAnalysis,
-        confirmedByUser: true,
-      };
+    // Allow edited field values from the review UI
+    if (Array.isArray(body.fieldEdits)) {
+      for (const edit of body.fieldEdits) {
+        if (!edit || typeof edit !== 'object') continue;
+        const key = String((edit as { key?: string }).key || '');
+        const value = String((edit as { value?: string }).value ?? '').trim();
+        const field = doc.aiAnalysis.fields.find((f) => f.key === key);
+        if (!field) continue;
+        field.value = value;
+        field.status = value ? 'accepted' : 'rejected';
+        if (value) field.confidence = 'high';
+      }
+    }
+
+    const mapped = mapDocumentFieldsFromExtraction(doc.aiAnalysis, [
+      ...acceptedFieldKeys,
+      '__title__',
+      '__type__',
+      '__authority__',
+    ]);
+
+    const applyIfEmptyOrAccepted = (
+      current: string | undefined,
+      next: string | undefined,
+      force: boolean
+    ): string | undefined => {
+      if (!next) return current;
+      if (force) return next;
+      if (!current || current === 'Pending AI identification') return next;
+      return current;
+    };
+
+    const forceOverwrite = body.applyMode === 'replace';
+    doc.title = applyIfEmptyOrAccepted(doc.title, mapped.title || (typeof body.title === 'string' ? body.title.trim() : undefined), forceOverwrite) || doc.title;
+    doc.documentType =
+      applyIfEmptyOrAccepted(
+        doc.documentType,
+        mapped.documentType || (typeof body.documentType === 'string' ? body.documentType.trim() : undefined),
+        forceOverwrite
+      ) || doc.documentType;
+    doc.issuingAuthority =
+      applyIfEmptyOrAccepted(
+        doc.issuingAuthority,
+        mapped.issuingAuthority ||
+          (typeof body.issuingAuthority === 'string' ? body.issuingAuthority.trim() : undefined),
+        forceOverwrite
+      ) || doc.issuingAuthority;
+    doc.referenceNumber = applyIfEmptyOrAccepted(
+      doc.referenceNumber,
+      mapped.referenceNumber ||
+        (typeof body.referenceNumber === 'string' ? body.referenceNumber.trim() : undefined),
+      forceOverwrite || !doc.referenceNumber
+    );
+    doc.issueDate = applyIfEmptyOrAccepted(
+      doc.issueDate,
+      mapped.issueDate || (typeof body.issueDate === 'string' ? body.issueDate.trim() : undefined),
+      forceOverwrite || !doc.issueDate
+    );
+    doc.expiryDate = applyIfEmptyOrAccepted(
+      doc.expiryDate,
+      mapped.expiryDate || (typeof body.expiryDate === 'string' ? body.expiryDate.trim() : undefined),
+      forceOverwrite || !doc.expiryDate
+    );
+    doc.relatedProductOrScope = applyIfEmptyOrAccepted(
+      doc.relatedProductOrScope,
+      mapped.relatedProductOrScope ||
+        (typeof body.relatedProductOrScope === 'string' ? body.relatedProductOrScope.trim() : undefined),
+      forceOverwrite || !doc.relatedProductOrScope
+    );
+    if (mapped.countryOfIssue) {
+      doc.countryOfIssue = applyIfEmptyOrAccepted(doc.countryOfIssue, mapped.countryOfIssue, forceOverwrite) || doc.countryOfIssue;
+    }
+
+    if (typeof body.checklistRuleId === 'string' && body.checklistRuleId.trim()) {
+      doc.checklistRuleId = body.checklistRuleId.trim();
+    } else if (!doc.checklistRuleId && doc.aiAnalysis.suggestedChecklistRuleId) {
+      doc.checklistRuleId = doc.aiAnalysis.suggestedChecklistRuleId;
+    }
+
+    // Optional explicit business profile updates — never silent overwrite
+    const acceptedProfileUpdates: Array<{ target: string; field: string; value: string }> =
+      Array.isArray(body.acceptedProfileUpdates) ? body.acceptedProfileUpdates : [];
+    for (const update of acceptedProfileUpdates) {
+      if (!update || typeof update.value !== 'string' || !update.value.trim()) continue;
+      if (update.target === 'business') {
+        if (update.field === 'name' && update.value.trim().length >= 2) {
+          business.name = update.value.trim();
+        }
+        if (update.field === 'country' && update.value.trim()) {
+          business.country = update.value.trim();
+        }
+        if (update.field === 'city' && update.value.trim()) {
+          business.city = update.value.trim();
+        }
+        if (update.field === 'industry' && update.value.trim()) {
+          business.industry = update.value.trim();
+        }
+        business.updatedAt = new Date().toISOString();
+      }
+    }
+
+    // Experience draft creation when user accepts experience proposals
+    if (body.createExperienceRecord === true && doc.aiAnalysis.documentFamily === 'experience') {
+      const getField = (key: string) =>
+        doc.aiAnalysis?.fields.find((f) => f.key === key && acceptedFieldKeys.includes(f.key))?.value?.trim();
+      const client = getField('client_organisation');
+      const project = getField('project_title');
+      if (client && project) {
+        const now = new Date().toISOString();
+        store.experienceRecords.push({
+          id: `exp_${crypto.randomUUID()}`,
+          businessId: business.id,
+          evidenceType: 'Certificate of Completion',
+          clientOrContractingOrg: client,
+          projectOrContractTitle: project,
+          sector: business.industry || 'General',
+          contractPeriod: getField('contract_reference') || 'Not stated',
+          completionDate: getField('completion_date') || getField('issue_date') || now.slice(0, 10),
+          natureOfDelivery: getField('service_delivered') || getField('performance_assessment') || project,
+          issuingOrganisation: getField('issuing_organisation') || doc.issuingAuthority,
+          verificationStatus: 'Uploaded (Unverified)',
+          publicDisplay: false,
+          confidentialityConfirmed: false,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    doc.aiAnalysis = {
+      ...doc.aiAnalysis,
+      confirmedByUser: true,
+      fields: doc.aiAnalysis.fields.map((f) =>
+        acceptedFieldKeys.includes(f.key)
+          ? { ...f, status: f.value ? 'accepted' : f.status }
+          : { ...f, status: f.status === 'extracted' ? 'rejected' : f.status }
+      ),
+    };
+    if (body.submitForReview === true) {
+      doc.status = 'Pending review';
     }
     doc.updatedAt = new Date().toISOString();
     saveStore();
 
     res.json({
       document: sanitizeComplianceDocument(doc),
+      business,
       workspace: buildComplianceWorkspaceForBusiness(business),
     });
   });

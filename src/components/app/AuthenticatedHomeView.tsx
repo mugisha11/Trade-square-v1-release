@@ -207,10 +207,17 @@ export function AuthenticatedHomeView({
   }
 
   const filteredOpportunities = opportunities.filter((opp) => {
-    if (feedFilter === 'saved') return opp.savedByMe;
+    const status = opp.status ?? 'published';
+    if (status !== 'published' && feedFilter !== 'saved') return false;
+    if (feedFilter === 'saved') return opp.savedByMe && status === 'published';
     if (feedFilter === 'Buyer Request')
-      return opp.type === 'Buyer Request' || opp.type === 'Procurement';
-    if (feedFilter === 'Supplier Offer') return opp.type === 'Supplier Offer';
+      return (
+        opp.type === 'Buyer Request' ||
+        opp.type === 'Procurement' ||
+        opp.type === 'Service Request'
+      );
+    if (feedFilter === 'Supplier Offer')
+      return opp.type === 'Supplier Offer' || opp.type === 'Export Opportunity';
     return true;
   });
 

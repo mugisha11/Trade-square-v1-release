@@ -30,6 +30,7 @@ import {
 import type {
   BusinessProfile,
   OpportunityRecord,
+  OpportunityStatus,
   OpportunityType,
   SessionPayload,
   UserProfile,
@@ -43,7 +44,7 @@ import { MessagesView } from './MessagesView';
 import { MyBusinessView } from './MyBusinessView';
 import { OpportunitiesView } from './OpportunitiesView';
 import { OpportunityDetailModal } from './OpportunityDetailModal';
-import { PublishOpportunityModal } from './PublishOpportunityModal';
+import { PublishOpportunityPage } from './PublishOpportunityPage';
 import { VerifiedBadge } from './VerifiedBadge';
 import { ThemeToggleButton } from '../ThemeToggle';
 import { authFetch } from '../../lib/authClient';
@@ -65,8 +66,8 @@ export function AuthenticatedWorkspace({
   const [user, setUser] = useState<UserProfile>(initialSession.user);
   const [business, setBusiness] = useState<BusinessProfile>(initialSession.business);
 
-  // Left sidebar MUST start fully collapsed by default
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Left sidebar starts open by default
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activePage, setActivePage] = useState<WorkspacePage>(initialPage);
 
   useEffect(() => {
@@ -92,7 +93,8 @@ export function AuthenticatedWorkspace({
   const [busyOpportunityId, setBusyOpportunityId] = useState<string | null>(null);
 
   // Modals & Messages routing
-  const [publishModalType, setPublishModalType] = useState<OpportunityType | null>(null);
+  const [publishInitialType, setPublishInitialType] = useState<OpportunityType>('Buyer Request');
+  const [publishDraftId, setPublishDraftId] = useState<string | null>(null);
   const [detailOpportunity, setDetailOpportunity] = useState<OpportunityRecord | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [utilityModal, setUtilityModal] = useState<'account' | 'settings' | 'help' | null>(null);
@@ -146,16 +148,31 @@ export function AuthenticatedWorkspace({
     setOpportunitiesLoading(true);
     setOpportunitiesError(null);
     try {
-      const res = await authFetch('/api/opportunities');
-      if (res.status === 401) {
+      const [allRes, mineRes] = await Promise.all([
+        authFetch('/api/opportunities'),
+        authFetch('/api/opportunities?scope=mine'),
+      ]);
+      if (allRes.status === 401 || mineRes.status === 401) {
         onLoggedOut();
         return;
       }
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to load opportunities.');
+      const allData = await allRes.json();
+      const mineData = await mineRes.json();
+      if (!allRes.ok) {
+        throw new Error(allData.error || 'Failed to load opportunities.');
       }
-      setOpportunities(data.opportunities ?? []);
+      if (!mineRes.ok) {
+        throw new Error(mineData.error || 'Failed to load your opportunities.');
+      }
+      const byId = new Map<string, OpportunityRecord>();
+      for (const opp of [...(allData.opportunities ?? []), ...(mineData.opportunities ?? [])] as OpportunityRecord[]) {
+        byId.set(opp.id, { ...opp, status: opp.status ?? 'published' });
+      }
+      setOpportunities(
+        Array.from(byId.values()).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        ),
+      );
     } catch (err: unknown) {
       setOpportunitiesError(
         err instanceof Error ? err.message : 'Unable to fetch opportunities from server.'
@@ -238,6 +255,38 @@ export function AuthenticatedWorkspace({
       showToast('success', data.saved ? 'Opportunity saved.' : 'Removed from saved opportunities.');
     } catch (err: unknown) {
       showToast('error', err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusyOpportunityId(null);
+    }
+  }
+
+  async function handleManageOpportunityStatus(opp: OpportunityRecord, status: OpportunityStatus) {
+    setBusyOpportunityId(opp.id);
+    try {
+      const res = await authFetch(`/api/opportunities/${opp.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not update opportunity status.');
+      setOpportunities((prev) =>
+        prev.map((item) => (item.id === opp.id ? { ...item, ...data.opportunity } : item)),
+      );
+      showToast(
+        'success',
+        status === 'published'
+          ? 'Opportunity resumed and published.'
+          : status === 'paused'
+            ? 'Opportunity paused.'
+            : status === 'closed'
+              ? 'Opportunity closed.'
+              : status === 'fulfilled'
+                ? 'Marked as fulfilled.'
+                : 'Opportunity updated.',
+      );
+    } catch (err: unknown) {
+      showToast('error', err instanceof Error ? err.message : 'Unable to update status.');
     } finally {
       setBusyOpportunityId(null);
     }
@@ -411,7 +460,9 @@ export function AuthenticatedWorkspace({
             >
               {topNavTabs.map((tab) => {
                 const Icon = tab.icon;
-                const active = activePage === tab.id;
+                const active =
+                  activePage === tab.id ||
+                  (tab.id === 'opportunities' && activePage === 'publish-opportunity');
                 return (
                   <button
                     key={tab.id}
@@ -497,7 +548,9 @@ export function AuthenticatedWorkspace({
               onClick={() => {
                 setFbMenuOpen(false);
                 setAccountMenuOpen(false);
-                setPublishModalType('Buyer Request');
+                setPublishDraftId(null);
+                setPublishInitialType('Buyer Request');
+                navigatePage('publish-opportunity');
               }}
               whileTap={prefersReducedMotion ? undefined : { scale: 0.92 }}
               title="Publish Opportunity"
@@ -582,7 +635,9 @@ export function AuthenticatedWorkspace({
                     </p>
                     {topNavTabs.map((tab) => {
                       const Icon = tab.icon;
-                      const isCurrent = activePage === tab.id;
+                      const isCurrent =
+                        activePage === tab.id ||
+                        (tab.id === 'opportunities' && activePage === 'publish-opportunity');
                       return (
                         <button
                           key={tab.id}
@@ -620,7 +675,9 @@ export function AuthenticatedWorkspace({
                       type="button"
                       onClick={() => {
                         setFbMenuOpen(false);
-                        setPublishModalType('Buyer Request');
+                        setPublishDraftId(null);
+                setPublishInitialType('Buyer Request');
+                navigatePage('publish-opportunity');
                       }}
                       className="w-full px-2.5 py-2 rounded-lg hover:bg-[#F2F2F2] dark:hover:bg-[#16181C] flex items-center gap-3 text-left transition-colors cursor-pointer"
                     >
@@ -640,7 +697,9 @@ export function AuthenticatedWorkspace({
                       type="button"
                       onClick={() => {
                         setFbMenuOpen(false);
-                        setPublishModalType('Supplier Offer');
+                        setPublishDraftId(null);
+                        setPublishInitialType('Supplier Offer');
+                        navigatePage('publish-opportunity');
                       }}
                       className="w-full px-2.5 py-2 rounded-lg hover:bg-[#F2F2F2] dark:hover:bg-[#16181C] flex items-center gap-3 text-left transition-colors cursor-pointer"
                     >
@@ -850,7 +909,7 @@ export function AuthenticatedWorkspace({
           </AnimatePresence>
         </header>
 
-      {/* Collapsible Fixed Left Sidebar (starts collapsed by default) + Mobile 3-button Bottom Nav */}
+      {/* Collapsible Fixed Left Sidebar (starts open by default) + Mobile 3-button Bottom Nav */}
       <AppSidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -880,7 +939,11 @@ export function AuthenticatedWorkspace({
               business={business}
               onNavigate={navigatePage}
               onOpenDiscover={handleOpenDiscover}
-              onOpenPublish={(t) => setPublishModalType(t ?? 'Buyer Request')}
+              onOpenPublish={(t) => {
+                setPublishDraftId(null);
+                setPublishInitialType(t ?? 'Buyer Request');
+                navigatePage('publish-opportunity');
+              }}
               onViewOpportunity={setDetailOpportunity}
               onContactOpportunity={handleContactOpportunity}
               onExpressInterest={handleExpressInterest}
@@ -912,7 +975,17 @@ export function AuthenticatedWorkspace({
             <OpportunitiesView
               opportunities={opportunities}
               loading={opportunitiesLoading}
-              onOpenPublish={(t) => setPublishModalType(t ?? 'Buyer Request')}
+              onOpenPublish={(t) => {
+                setPublishDraftId(null);
+                setPublishInitialType(t ?? 'Buyer Request');
+                navigatePage('publish-opportunity');
+              }}
+              onResumeDraft={(opp) => {
+                setPublishDraftId(opp.id);
+                setPublishInitialType(opp.type);
+                navigatePage('publish-opportunity');
+              }}
+              onManageStatus={handleManageOpportunityStatus}
               onViewOpportunity={setDetailOpportunity}
               onContactOpportunity={handleContactOpportunity}
               onExpressInterest={handleExpressInterest}
@@ -929,7 +1002,11 @@ export function AuthenticatedWorkspace({
             <MyBusinessView
               business={business}
               opportunities={opportunities}
-              onOpenPublish={(t) => setPublishModalType(t ?? 'Buyer Request')}
+              onOpenPublish={(t) => {
+                setPublishDraftId(null);
+                setPublishInitialType(t ?? 'Buyer Request');
+                navigatePage('publish-opportunity');
+              }}
               onViewOpportunity={setDetailOpportunity}
               onShowToast={showToast}
               onUpdated={(updated) => {
@@ -938,22 +1015,48 @@ export function AuthenticatedWorkspace({
               }}
             />
           )}
+
+          {activePage === 'publish-opportunity' && (
+            <PublishOpportunityPage
+              key={publishDraftId ?? `new-${publishInitialType}`}
+              initialType={publishInitialType}
+              defaultIndustry={business.industry}
+              businessName={business.name}
+              businessLocation={[business.city, business.country].filter(Boolean).join(', ')}
+              businessLogoUrl={business.logoUrl}
+              verifiedRecord={business.verifiedRecord}
+              draftToResume={
+                publishDraftId
+                  ? opportunities.find((o) => o.id === publishDraftId) ?? null
+                  : null
+              }
+              onCancel={() => {
+                setPublishDraftId(null);
+                navigatePage('home');
+              }}
+              onPublishedNavigate={() => {
+                setPublishDraftId(null);
+                navigatePage('opportunities');
+              }}
+              onCreated={(opp) => {
+                setOpportunities((prev) => {
+                  const without = prev.filter((o) => o.id !== opp.id);
+                  return [opp, ...without];
+                });
+                showToast('success', `Published ${opp.type}: ${opp.productOrService}`);
+              }}
+              onUpdated={(opp) => {
+                setOpportunities((prev) => {
+                  const without = prev.filter((o) => o.id !== opp.id);
+                  return [opp, ...without];
+                });
+              }}
+            />
+          )}
         </div>
       </main>
 
       {/* Modals */}
-      {publishModalType && (
-        <PublishOpportunityModal
-          initialType={publishModalType}
-          defaultIndustry={business.industry}
-          onClose={() => setPublishModalType(null)}
-          onCreated={(opp) => {
-            setOpportunities((prev) => [opp, ...prev]);
-            setPublishModalType(null);
-            showToast('success', `Published ${opp.type}: ${opp.productOrService}`);
-          }}
-        />
-      )}
 
       {detailOpportunity && (
         <OpportunityDetailModal

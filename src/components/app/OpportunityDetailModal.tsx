@@ -1,5 +1,6 @@
 import { Calendar, MapPin, MessageSquare, X } from 'lucide-react';
 import type { OpportunityRecord } from '../../types/workspace';
+import { opportunityTypeLabel } from '../../lib/opportunityFields';
 import { VerifiedBadge } from './VerifiedBadge';
 
 interface OpportunityDetailModalProps {
@@ -36,7 +37,7 @@ export function OpportunityDetailModal({
 
         <div className="pr-8">
           <p className="text-xs font-semibold text-[#0A66C2] dark:text-[#1D9BF0]">
-            {opportunity.type}
+            {opportunityTypeLabel(opportunity.type)}
           </p>
           <h2 className="text-xl font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
             {opportunity.productOrService}
@@ -64,13 +65,40 @@ export function OpportunityDetailModal({
             {opportunity.description}
           </p>
 
-          {(opportunity.quantityAndSpecs || opportunity.destinationMarket || opportunity.deadline) && (
-            <dl className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-xl bg-[#F3F6F8] dark:bg-[#000000] border border-[#E2E8F0] dark:border-[#2F3336] text-xs">
-              {opportunity.quantityAndSpecs && (
+          {(opportunity.quantityAndSpecs ||
+            opportunity.quantity ||
+            opportunity.budgetOrPrice ||
+            opportunity.originLocation ||
+            opportunity.destinationMarket ||
+            opportunity.deliveryTimeline ||
+            opportunity.deadline ||
+            opportunity.requiredCertifications ||
+            opportunity.paymentTerms ||
+            (opportunity.showPublicContact && opportunity.contactPreference)) && (
+            <dl className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-[#F3F6F8] dark:bg-[#000000] border border-[#E2E8F0] dark:border-[#2F3336] text-xs">
+              {(opportunity.quantity || opportunity.unit || opportunity.quantityAndSpecs) && (
                 <div>
                   <dt className="text-[#64748B] dark:text-[#71767B]">Quantity &amp; Specs</dt>
                   <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
-                    {opportunity.quantityAndSpecs}
+                    {opportunity.quantityAndSpecs ||
+                      [opportunity.quantity, opportunity.unit].filter(Boolean).join(' ')}
+                  </dd>
+                </div>
+              )}
+              {opportunity.budgetOrPrice && (
+                <div>
+                  <dt className="text-[#64748B] dark:text-[#71767B]">Budget / price</dt>
+                  <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
+                    {[opportunity.currency, opportunity.budgetOrPrice].filter(Boolean).join(' ')}
+                    {opportunity.priceNegotiable ? ' (negotiable)' : ''}
+                  </dd>
+                </div>
+              )}
+              {opportunity.originLocation && (
+                <div>
+                  <dt className="text-[#64748B] dark:text-[#71767B]">Origin</dt>
+                  <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
+                    {opportunity.originLocation}
                   </dd>
                 </div>
               )}
@@ -82,12 +110,44 @@ export function OpportunityDetailModal({
                   </dd>
                 </div>
               )}
+              {opportunity.deliveryTimeline && (
+                <div>
+                  <dt className="text-[#64748B] dark:text-[#71767B]">Timeline</dt>
+                  <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
+                    {opportunity.deliveryTimeline}
+                  </dd>
+                </div>
+              )}
               {opportunity.deadline && (
                 <div>
                   <dt className="text-[#64748B] dark:text-[#71767B]">Deadline</dt>
                   <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1 inline-flex items-center gap-1 tabular-nums">
                     <Calendar className="w-3 h-3" />
                     {opportunity.deadline}
+                  </dd>
+                </div>
+              )}
+              {opportunity.requiredCertifications && (
+                <div className="sm:col-span-2">
+                  <dt className="text-[#64748B] dark:text-[#71767B]">Certifications / docs</dt>
+                  <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
+                    {opportunity.requiredCertifications}
+                  </dd>
+                </div>
+              )}
+              {opportunity.paymentTerms && (
+                <div>
+                  <dt className="text-[#64748B] dark:text-[#71767B]">Payment terms</dt>
+                  <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
+                    {opportunity.paymentTerms}
+                  </dd>
+                </div>
+              )}
+              {opportunity.showPublicContact && opportunity.contactPreference && (
+                <div className="sm:col-span-2">
+                  <dt className="text-[#64748B] dark:text-[#71767B]">Contact preference</dt>
+                  <dd className="font-semibold text-[#191919] dark:text-[#E7E9EA] mt-1">
+                    {opportunity.contactPreference}
                   </dd>
                 </div>
               )}

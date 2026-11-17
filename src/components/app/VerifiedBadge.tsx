@@ -3,9 +3,10 @@ import { BadgeCheck } from 'lucide-react';
 interface VerifiedBadgeProps {
   size?: 'sm' | 'md';
   className?: string;
+  showLabel?: boolean;
 }
 
-export function VerifiedBadge({ size = 'md', className = '' }: VerifiedBadgeProps) {
+export function VerifiedBadge({ size = 'md', className = '', showLabel = true }: VerifiedBadgeProps) {
   const isSmall = size === 'sm';
 
   return (
@@ -20,7 +21,7 @@ export function VerifiedBadge({ size = 'md', className = '' }: VerifiedBadgeProp
         className={`${isSmall ? 'w-4 h-4' : 'w-[17px] h-[17px]'} fill-[#0866FF] dark:fill-[#1D9BF0] text-white shrink-0`}
         aria-hidden="true"
       />
-      <span>Verified</span>
+      {showLabel && <span>Verified</span>}
     </span>
   );
 }

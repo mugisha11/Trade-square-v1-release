@@ -95,6 +95,11 @@ export function AppSidebar({
     }
   }
 
+  function isNavActive(page: WorkspacePage) {
+    if (activePage === page) return true;
+    return page === 'opportunities' && activePage === 'publish-opportunity';
+  }
+
   function handleUtilityModal(modal: 'account' | 'settings' | 'help') {
     onOpenModal(modal);
     if (window.innerWidth < 1024) {
@@ -171,7 +176,7 @@ export function AppSidebar({
                 >
                   {NAV_ITEMS.map((item, idx) => {
                     const Icon = item.icon;
-                    const active = activePage === item.id;
+                    const active = isNavActive(item.id);
                     return (
                       <motion.button
                         key={item.id}
@@ -399,7 +404,7 @@ export function AppSidebar({
           { id: 'messages' as WorkspacePage, label: 'Messages', icon: MessageSquare },
         ].map((item) => {
           const Icon = item.icon;
-          const active = activePage === item.id;
+          const active = isNavActive(item.id);
           return (
             <motion.button
               key={item.id}

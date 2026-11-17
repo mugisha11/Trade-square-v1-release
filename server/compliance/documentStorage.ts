@@ -27,6 +27,7 @@ export interface StoredFileDescriptor {
   storageKey: string;
   mimeType: string;
   fileSizeBytes: number;
+  contentHash: string;
 }
 
 export function validateAndSaveBase64Document(params: {
@@ -70,6 +71,7 @@ export function validateAndSaveBase64Document(params: {
     }
   }
 
+  const contentHash = crypto.createHash('sha256').update(buffer).digest('hex');
   const dir = ensureBusinessDir(params.businessId);
   const storageKey = `${crypto.randomUUID()}${ext}`;
   const fullPath = path.join(dir, storageKey);
@@ -79,6 +81,7 @@ export function validateAndSaveBase64Document(params: {
     storageKey,
     mimeType: normalizedMime === 'image/jpg' ? 'image/jpeg' : normalizedMime,
     fileSizeBytes: buffer.length,
+    contentHash,
   };
 }
 

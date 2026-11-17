@@ -253,6 +253,7 @@ export function ComplianceCentre({
           }}
           onWorkspaceRefresh={loadWorkspace}
           onShowToast={onShowToast}
+          onBusinessSynced={onBusinessSynced}
         />
       )}
 

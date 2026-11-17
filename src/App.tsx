@@ -21,6 +21,7 @@ const WORKSPACE_ROUTE_TO_PAGE: Record<string, WorkspacePage> = {
   '/messages': 'messages',
   '/my-business': 'my-business',
   '/profile': 'my-business',
+  '/publish-opportunity': 'publish-opportunity',
 };
 
 const PAGE_TO_WORKSPACE_ROUTE: Record<WorkspacePage, string> = {
@@ -29,8 +30,8 @@ const PAGE_TO_WORKSPACE_ROUTE: Record<WorkspacePage, string> = {
   opportunities: '/opportunities',
   messages: '/messages',
   'my-business': '/my-business',
+  'publish-opportunity': '/publish-opportunity',
 };
-
 function normalizePathname(raw: string): string {
   if (!raw || raw === '/') return '/';
   return raw.endsWith('/') ? raw.slice(0, -1) : raw;

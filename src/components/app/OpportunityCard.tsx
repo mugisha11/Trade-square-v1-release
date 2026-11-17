@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { OpportunityRecord } from '../../types/workspace';
+import { opportunityTypeLabel } from '../../lib/opportunityFields';
 import { VerifiedBadge } from './VerifiedBadge';
 
 interface OpportunityCardProps {
@@ -22,10 +23,10 @@ interface OpportunityCardProps {
 }
 
 function getOpportunityTypeStyle(type: OpportunityRecord['type']): string {
-  if (type === 'Buyer Request' || type === 'Procurement') {
+  if (type === 'Buyer Request' || type === 'Procurement' || type === 'Service Request') {
     return 'text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0]/70 dark:text-[#00BA7C] dark:bg-[#00BA7C]/15 dark:border-[#00BA7C]/30';
   }
-  if (type === 'Supplier Offer') {
+  if (type === 'Supplier Offer' || type === 'Export Opportunity') {
     return 'text-[#B45309] bg-[#FFFBEB] border border-[#FDE68A]/80 dark:text-[#FBBF24] dark:bg-[#F59E0B]/15 dark:border-[#F59E0B]/30';
   }
   return 'text-[#0F52BA] bg-[#EFF6FF] border border-[#BFDBFE]/80 dark:text-[#1D9BF0] dark:bg-[#1D9BF0]/15 dark:border-[#1D9BF0]/30';
@@ -95,7 +96,7 @@ export function OpportunityCard({
                   opportunity.type
                 )}`}
               >
-                {opportunity.type}
+                {opportunityTypeLabel(opportunity.type)}
               </span>
             </div>
 

@@ -1,4 +1,10 @@
-export type WorkspacePage = 'home' | 'discover' | 'opportunities' | 'messages' | 'my-business';
+export type WorkspacePage =
+  | 'home'
+  | 'discover'
+  | 'opportunities'
+  | 'messages'
+  | 'my-business'
+  | 'publish-opportunity';
 
 export type WorkspaceLanguage = 'en' | 'fr' | 'rw';
 
@@ -18,7 +24,11 @@ export type OpportunityType =
   | 'Supplier Offer'
   | 'Distribution'
   | 'Procurement'
-  | 'Partnership';
+  | 'Partnership'
+  | 'Export Opportunity'
+  | 'Service Request';
+
+export type OpportunityStatus = 'draft' | 'published' | 'paused' | 'closed' | 'fulfilled';
 
 export interface UserProfile {
   id: string;
@@ -42,6 +52,7 @@ export interface BusinessProfile {
   targetMarkets: string[];
   requirements: string;
   logoUrl?: string;
+  coverUrl?: string;
   verifiedRecord: boolean;
   updatedAt: string;
 }
@@ -67,9 +78,60 @@ export interface OpportunityRecord {
   deadline?: string;
   industry: string;
   createdAt: string;
+  updatedAt?: string;
+  publishedAt?: string;
+  status: OpportunityStatus;
+  technicalSpecs?: string;
+  qualityRequirements?: string;
+  quantity?: string;
+  unit?: string;
+  capacity?: string;
+  moq?: string;
+  budgetOrPrice?: string;
+  currency?: string;
+  paymentTerms?: string;
+  priceNegotiable?: boolean;
+  originLocation?: string;
+  deliveryTimeline?: string;
+  requiredCertifications?: string;
+  eligibilityRequirements?: string;
+  preferredPartnerTraits?: string;
+  contactPreference?: string;
+  showPublicContact?: boolean;
   savedByMe: boolean;
   interestExpressedByMe: boolean;
   isOwnOpportunity: boolean;
+}
+
+export interface OpportunityAssistSuggestion {
+  productOrService?: string;
+  description?: string;
+  industry?: string;
+  quantityAndSpecs?: string;
+  quantity?: string;
+  unit?: string;
+  destinationMarket?: string;
+  originLocation?: string;
+  deliveryTimeline?: string;
+  deadline?: string;
+  technicalSpecs?: string;
+  qualityRequirements?: string;
+  requiredCertifications?: string;
+  budgetOrPrice?: string;
+  currency?: string;
+  paymentTerms?: string;
+  clarificationQuestions: string[];
+  missingInformation: string[];
+  qualityNotes: string[];
+  suggestedCategory?: string;
+}
+
+export interface OpportunityQualityReview {
+  summary: string;
+  strengths: string[];
+  gaps: string[];
+  recommendations: Array<{ title: string; reason: string }>;
+  readyToPublish: boolean;
 }
 
 export interface BusinessRecommendation {

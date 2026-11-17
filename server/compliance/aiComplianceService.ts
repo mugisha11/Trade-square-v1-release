@@ -8,6 +8,27 @@ import type {
 } from '../../src/types/compliance';
 import { REGULATORY_SOURCES } from './sourceRegistry';
 import { REGULATORY_RULES } from './regulatoryRules';
+import { analyzeWithTradeSquareDocModel } from './tradesquareDocModel';
+
+/**
+ * Document analysis uses TradeSquare Document Intelligence v1
+ * (local OCR + typed extractors). Gemini is NOT used for document reading.
+ */
+export async function analyzeUploadedDocumentWithAi(params: {
+  fileBuffer: Buffer;
+  mimeType: string;
+  fileName: string;
+  documentRecord: UploadedDocumentRecord;
+  businessName: string;
+  businessCountry: string;
+  businessCity: string;
+  businessIndustry: string;
+  profile: BusinessRequirementsProfile;
+  checklist: ChecklistItem[];
+  existingDocuments: UploadedDocumentRecord[];
+}): Promise<DocumentAiExtraction> {
+  return analyzeWithTradeSquareDocModel(params);
+}
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -24,125 +45,7 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
-export async function analyzeUploadedDocumentWithAi(params: {
-  fileBuffer: Buffer;
-  mimeType: string;
-  fileName: string;
-  documentRecord: UploadedDocumentRecord;
-  businessName: string;
-  profile: BusinessRequirementsProfile;
-}): Promise<DocumentAiExtraction> {
-  const ai = getGeminiClient();
-
-  const prompt = [
-    'Analyze this uploaded business compliance or commercial document (PDF or image).',
-    `Expected Enterprise Name in TradeSquare Profile: "${params.businessName}"`,
-    `Profile Registration Country: "${params.profile.registrationCountry}"`,
-    `User-selected Document Type: "${params.documentRecord.documentType}"`,
-    `User-entered Title: "${params.documentRecord.title}"`,
-    `User-entered Issuing Authority: "${params.documentRecord.issuingAuthority}"`,
-    `File Name: "${params.fileName}"`,
-    '',
-    'CRITICAL RULES:',
-    '- Extract only details clearly visible in the document. If a field (e.g. expiry date or reference number) is not printed or illegible, leave it empty/omitted rather than guessing.',
-    '- Compare any visible business/company name against the Expected Enterprise Name and set businessNameMatchesProfile honestly.',
-    '- Check for readability issues, missing signature/pages, or expired dates.',
-    '- If there are inconsistencies, unreadable sections, or expiry issues, set flaggedForHumanReview = true and explain calmly in reviewFlagReasons. NEVER accuse forgery.',
-  ].join('\n');
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-4-hydrogen',
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: params.mimeType,
-            data: params.fileBuffer.toString('base64'),
-          },
-        },
-        { text: prompt },
-      ],
-    },
-    config: {
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          detectedDocumentType: { type: Type.STRING },
-          extractedTitle: { type: Type.STRING },
-          extractedIssuingAuthority: { type: Type.STRING },
-          extractedIssueDate: { type: Type.STRING },
-          extractedExpiryDate: { type: Type.STRING },
-          extractedReferenceNumber: { type: Type.STRING },
-          relatedBusinessOrProduct: { type: Type.STRING },
-          extractedBusinessName: { type: Type.STRING },
-          businessNameMatchesProfile: { type: Type.BOOLEAN },
-          completenessIssues: { type: Type.ARRAY, items: { type: Type.STRING } },
-          expiryWarnings: { type: Type.ARRAY, items: { type: Type.STRING } },
-          flaggedForHumanReview: { type: Type.BOOLEAN },
-          reviewFlagReasons: { type: Type.ARRAY, items: { type: Type.STRING } },
-        },
-        required: [
-          'detectedDocumentType',
-          'extractedTitle',
-          'extractedIssuingAuthority',
-          'businessNameMatchesProfile',
-          'completenessIssues',
-          'expiryWarnings',
-          'flaggedForHumanReview',
-          'reviewFlagReasons',
-        ],
-      },
-    },
-  });
-
-  const raw = (response.text ?? '').trim();
-  if (!raw) {
-    throw new Error('AI document analyzer returned an empty response.');
-  }
-
-  const parsed = JSON.parse(raw);
-
-  // Additional deterministic expiry check
-  const expiryWarnings: string[] = Array.isArray(parsed.expiryWarnings) ? [...parsed.expiryWarnings] : [];
-  if (parsed.extractedExpiryDate) {
-    const ms = Date.parse(parsed.extractedExpiryDate);
-    if (!Number.isNaN(ms)) {
-      const days = (ms - Date.now()) / (1000 * 60 * 60 * 24);
-      if (days < 0 && !expiryWarnings.some((w) => w.toLowerCase().includes('expired'))) {
-        expiryWarnings.push(`Extracted expiry date (${parsed.extractedExpiryDate}) appears to be in the past.`);
-      } else if (days >= 0 && days <= 30 && !expiryWarnings.some((w) => w.toLowerCase().includes('soon'))) {
-        expiryWarnings.push(`Extracted expiry date (${parsed.extractedExpiryDate}) is within 30 days.`);
-      }
-    }
-  }
-
-  return {
-    detectedDocumentType: parsed.detectedDocumentType || params.documentRecord.documentType,
-    extractedTitle: parsed.extractedTitle || params.documentRecord.title,
-    extractedIssuingAuthority:
-      parsed.extractedIssuingAuthority || params.documentRecord.issuingAuthority,
-    extractedIssueDate: parsed.extractedIssueDate || undefined,
-    extractedExpiryDate: parsed.extractedExpiryDate || undefined,
-    extractedReferenceNumber: parsed.extractedReferenceNumber || undefined,
-    relatedBusinessOrProduct: parsed.relatedBusinessOrProduct || undefined,
-    extractedBusinessName: parsed.extractedBusinessName || undefined,
-    businessNameMatchesProfile: Boolean(parsed.businessNameMatchesProfile),
-    completenessIssues: Array.isArray(parsed.completenessIssues) ? parsed.completenessIssues : [],
-    expiryWarnings,
-    flaggedForHumanReview:
-      Boolean(parsed.flaggedForHumanReview) ||
-      !parsed.businessNameMatchesProfile ||
-      expiryWarnings.length > 0,
-    reviewFlagReasons: Array.isArray(parsed.reviewFlagReasons) ? parsed.reviewFlagReasons : [],
-    disclaimer:
-      'AI-extracted details assist with document pre-screening and data entry only. AI analysis never confirms authenticity or serves as official regulatory verification.',
-    confirmedByUser: false,
-    analyzedAt: new Date().toISOString(),
-  };
-}
-
+/** Compliance Q&A assistant (separate from document OCR/extraction). */
 export async function answerComplianceQuestionWithAi(params: {
   question: string;
   businessName: string;
@@ -155,7 +58,6 @@ export async function answerComplianceQuestionWithAi(params: {
   const authoritativeSources = REGULATORY_SOURCES.filter((s) => s.canEstablishLegalObligation);
   const validSourceUrlMap = new Map(REGULATORY_SOURCES.map((s) => [s.url, s]));
 
-  // Retrieve top matching rules and checklist context
   const qLower = params.question.toLowerCase();
   const relevantRules = REGULATORY_RULES.filter((r) => {
     const hay = `${r.documentName} ${r.jurisdiction} ${r.requirementText} ${r.reasonText} ${r.responsibleAuthority}`.toLowerCase();
@@ -287,7 +189,6 @@ export async function answerComplianceQuestionWithAi(params: {
 
   const parsed = JSON.parse(raw);
 
-  // Enforce strict URL citation integrity
   const sanitizedCitations = (Array.isArray(parsed.citations) ? parsed.citations : [])
     .map((c: { sourceName: string; officialUrl: string }) => {
       const matched = validSourceUrlMap.get(c.officialUrl);

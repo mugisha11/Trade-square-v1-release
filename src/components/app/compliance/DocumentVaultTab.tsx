@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -19,6 +19,7 @@ import type {
   DocumentCategory,
   UploadedDocumentRecord,
 } from '../../../types/compliance';
+import type { BusinessProfile } from '../../../types/workspace';
 import { authFetch } from '../../../lib/authClient';
 import {
   CATEGORY_LABELS,
@@ -26,6 +27,7 @@ import {
   formatBytes,
   readFileAsBase64,
 } from './ComplianceBadges';
+import { AiExtractionReviewPanel } from './AiExtractionReviewPanel';
 
 interface DocumentVaultTabProps {
   documents: UploadedDocumentRecord[];
@@ -36,6 +38,7 @@ interface DocumentVaultTabProps {
   onClearPreselection: () => void;
   onWorkspaceRefresh: () => Promise<void>;
   onShowToast?: (kind: 'success' | 'error', text: string) => void;
+  onBusinessSynced?: (updated: BusinessProfile) => void;
 }
 
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -50,9 +53,15 @@ export function DocumentVaultTab({
   onClearPreselection,
   onWorkspaceRefresh,
   onShowToast,
+  onBusinessSynced,
 }: DocumentVaultTabProps) {
   const [showUploadForm, setShowUploadForm] = useState(false);
   const [editingDoc, setEditingDoc] = useState<UploadedDocumentRecord | null>(null);
+  const [smartUploading, setSmartUploading] = useState(false);
+  const [smartPhase, setSmartPhase] = useState<string | null>(null);
+  const [reviewDocId, setReviewDocId] = useState<string | null>(null);
+  const [reviewPreviewUrl, setReviewPreviewUrl] = useState<string | null>(null);
+  const smartFileInputRef = useRef<HTMLInputElement>(null);
 
   // Upload / Edit Form State
   const [checklistRuleId, setChecklistRuleId] = useState('');
@@ -73,7 +82,6 @@ export function DocumentVaultTab({
 
   // AI & File Preview States
   const [analyzingDocId, setAnalyzingDocId] = useState<string | null>(null);
-  const [confirmingDocId, setConfirmingDocId] = useState<string | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [previewState, setPreviewState] = useState<{
     doc: UploadedDocumentRecord;
@@ -276,7 +284,23 @@ export function DocumentVaultTab({
     }
   }
 
-  async function handleAnalyzeWithAi(doc: UploadedDocumentRecord) {
+  async function openReviewForDoc(doc: UploadedDocumentRecord) {
+    setReviewDocId(doc.id);
+    try {
+      const res = await authFetch(`/api/compliance/documents/${doc.id}/file`);
+      if (res.ok) {
+        const blob = await res.blob();
+        setReviewPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(blob);
+        });
+      }
+    } catch {
+      // Preview is optional
+    }
+  }
+
+  async function handleAnalyzeWithAi(doc: UploadedDocumentRecord, openReview = true) {
     setAnalyzingDocId(doc.id);
     try {
       const res = await authFetch(`/api/compliance/documents/${doc.id}/analyze`, {
@@ -285,7 +309,10 @@ export function DocumentVaultTab({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'AI analysis failed.');
       await onWorkspaceRefresh();
-      onShowToast?.('success', 'AI extraction complete. Please review and confirm the extracted fields.');
+      onShowToast?.('success', 'AI extraction complete. Please review and confirm.');
+      if (openReview && data.document) {
+        await openReviewForDoc(data.document as UploadedDocumentRecord);
+      }
     } catch (err: unknown) {
       onShowToast?.('error', err instanceof Error ? err.message : 'AI analysis unavailable.');
     } finally {
@@ -293,31 +320,86 @@ export function DocumentVaultTab({
     }
   }
 
-  async function handleConfirmAiExtraction(doc: UploadedDocumentRecord) {
-    if (!doc.aiAnalysis) return;
-    setConfirmingDocId(doc.id);
+  async function handleSmartUpload(files: FileList | File[] | null) {
+    if (!files || files.length === 0) return;
+    const queue = Array.from(files);
+    setSmartUploading(true);
     try {
-      const res = await authFetch(`/api/compliance/documents/${doc.id}/confirm-analysis`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: doc.aiAnalysis.extractedTitle || doc.title,
-          documentType: doc.aiAnalysis.detectedDocumentType || doc.documentType,
-          issuingAuthority: doc.aiAnalysis.extractedIssuingAuthority || doc.issuingAuthority,
-          referenceNumber: doc.aiAnalysis.extractedReferenceNumber || doc.referenceNumber,
-          issueDate: doc.aiAnalysis.extractedIssueDate || doc.issueDate,
-          expiryDate: doc.aiAnalysis.extractedExpiryDate || doc.expiryDate,
-          relatedProductOrScope: doc.aiAnalysis.relatedBusinessOrProduct || doc.relatedProductOrScope,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Could not confirm extracted fields.');
-      await onWorkspaceRefresh();
-      onShowToast?.('success', 'Extracted document details applied and confirmed.');
+      for (let i = 0; i < queue.length; i += 1) {
+        const file = queue[i];
+        const mime = file.type.toLowerCase();
+        if (!ACCEPTED_TYPES.has(mime)) {
+          onShowToast?.('error', `${file.name}: unsupported format. Use PDF, JPG, JPEG, or PNG.`);
+          continue;
+        }
+        if (file.size > MAX_BYTES) {
+          onShowToast?.('error', `${file.name}: exceeds 8 MB limit.`);
+          continue;
+        }
+
+        setSmartPhase(
+          queue.length > 1
+            ? `Uploading ${i + 1}/${queue.length}: ${file.name}`
+            : `Uploading ${file.name}`
+        );
+        const base64Content = await readFileAsBase64(file);
+        const uploadRes = await authFetch('/api/compliance/documents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            smartUpload: true,
+            checklistRuleId: preselectedChecklistItem?.ruleId || undefined,
+            category: preselectedChecklistItem?.category || 'BUSINESS_REGISTRATION',
+            title: file.name.replace(/\.[^.]+$/, ''),
+            documentType: preselectedChecklistItem?.documentName || 'Pending AI identification',
+            issuingAuthority:
+              preselectedChecklistItem?.responsibleAuthority || 'Pending AI identification',
+            countryOfIssue:
+              preselectedChecklistItem?.destinationJurisdiction ||
+              preselectedChecklistItem?.jurisdiction ||
+              defaultCountry,
+            relatedProductOrScope: preselectedChecklistItem?.relevantProducts.join(', ') || undefined,
+            fileName: file.name,
+            mimeType: file.type || 'application/pdf',
+            base64Content,
+            submitForReview: false,
+          }),
+        });
+        const uploadData = await uploadRes.json();
+        if (!uploadRes.ok) {
+          throw new Error(uploadData.error || `Could not upload ${file.name}`);
+        }
+
+        const created = uploadData.document as UploadedDocumentRecord;
+        setSmartPhase(`Reading & extracting: ${file.name}`);
+        setAnalyzingDocId(created.id);
+        const analyzeRes = await authFetch(`/api/compliance/documents/${created.id}/analyze`, {
+          method: 'POST',
+        });
+        const analyzeData = await analyzeRes.json();
+        if (!analyzeRes.ok) {
+          await onWorkspaceRefresh();
+          const deniedMessage =
+            typeof analyzeData.error === 'string'
+              ? analyzeData.error
+              : `No. Upload rejected for ${file.name}.`;
+          onShowToast?.('error', deniedMessage);
+          continue;
+        }
+
+        await onWorkspaceRefresh();
+        onClearPreselection();
+        if (i === queue.length - 1 && analyzeData.document) {
+          await openReviewForDoc(analyzeData.document as UploadedDocumentRecord);
+        }
+      }
     } catch (err: unknown) {
-      onShowToast?.('error', err instanceof Error ? err.message : 'Confirmation failed.');
+      onShowToast?.('error', err instanceof Error ? err.message : 'Smart upload failed.');
+      await onWorkspaceRefresh();
     } finally {
-      setConfirmingDocId(null);
+      setAnalyzingDocId(null);
+      setSmartUploading(false);
+      setSmartPhase(null);
     }
   }
 
@@ -337,13 +419,51 @@ export function DocumentVaultTab({
     }
   }
 
+  const reviewDoc = reviewDocId
+    ? documents.find((d) => d.id === reviewDocId) || null
+    : null;
+
   return (
     <div className="space-y-6">
+      <input
+        ref={smartFileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,image/jpg,application/pdf"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          void handleSmartUpload(e.target.files);
+          e.target.value = '';
+        }}
+      />
+
+      {reviewDoc?.aiAnalysis && !reviewDoc.aiAnalysis.confirmedByUser && (
+        <AiExtractionReviewPanel
+          doc={reviewDoc}
+          previewUrl={reviewPreviewUrl}
+          onClose={() => {
+            setReviewDocId(null);
+            if (reviewPreviewUrl) URL.revokeObjectURL(reviewPreviewUrl);
+            setReviewPreviewUrl(null);
+          }}
+          onConfirmed={async (payload) => {
+            if (payload.business && onBusinessSynced) {
+              onBusinessSynced(payload.business as BusinessProfile);
+            }
+            setReviewDocId(null);
+            if (reviewPreviewUrl) URL.revokeObjectURL(reviewPreviewUrl);
+            setReviewPreviewUrl(null);
+            await onWorkspaceRefresh();
+          }}
+          onShowToast={onShowToast}
+        />
+      )}
+
       {/* Header Bar */}
       <div className="bg-white dark:bg-[#16181C] border border-[#E2E8F0] dark:border-[#2F3336] rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold text-[#191919] dark:text-[#E7E9EA]">
-            Private Business Document Vault &amp; AI Pre-Screening
+            Document Intelligence Vault
           </h2>
           <p className="text-xs text-[#525866] dark:text-[#71767B] mt-0.5 max-w-2xl">
             Files uploaded here are private to your enterprise account and never published publicly. Uploaded documents remain{' '}
@@ -351,14 +471,64 @@ export function DocumentVaultTab({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={openNewUpload}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[#0A66C2] hover:bg-[#004182] dark:bg-[#1D9BF0] dark:hover:bg-[#1A8CD8] text-white text-xs font-semibold transition-colors shrink-0 cursor-pointer"
-        >
-          <FileUp className="w-4 h-4" />
-          Upload Compliance Document
-        </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            disabled={smartUploading}
+            onClick={() => smartFileInputRef.current?.click()}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[#0A66C2] hover:bg-[#004182] dark:bg-[#1D9BF0] dark:hover:bg-[#1A8CD8] disabled:opacity-60 text-white text-xs font-semibold transition-colors cursor-pointer"
+          >
+            {smartUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            AI Smart Upload
+          </button>
+          <button
+            type="button"
+            onClick={openNewUpload}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-[#E2E8F0] dark:border-[#2F3336] text-[#191919] dark:text-[#E7E9EA] text-xs font-semibold hover:bg-[#F8FAFC] dark:hover:bg-[#202327] cursor-pointer"
+          >
+            <FileUp className="w-4 h-4" />
+            Manual upload
+          </button>
+        </div>
+      </div>
+
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => !smartUploading && smartFileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            if (!smartUploading) smartFileInputRef.current?.click();
+          }
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!smartUploading) void handleSmartUpload(e.dataTransfer.files);
+        }}
+        className="bg-white dark:bg-[#16181C] border border-dashed border-[#0A66C2]/50 dark:border-[#1D9BF0]/50 rounded-xl p-6 text-center cursor-pointer hover:bg-[#F8FBFF] dark:hover:bg-[#1D9BF0]/5 transition-colors"
+      >
+        {smartUploading ? (
+          <div className="inline-flex items-center gap-2 text-sm font-medium text-[#0A66C2] dark:text-[#1D9BF0]">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            {smartPhase || 'Processing document…'}
+          </div>
+        ) : (
+          <>
+            <p className="text-sm font-semibold text-[#191919] dark:text-[#E7E9EA]">
+              Drop PDF, JPG, or PNG documents for TradeSquare reading &amp; auto form-fill
+            </p>
+            <p className="text-xs text-[#525866] dark:text-[#71767B] mt-1">
+              TradeSquare must clearly understand the document and confirm it belongs to your
+              business. Unrelated, fake, unclear, or duplicate uploads are answered with No.
+            </p>
+          </>
+        )}
       </div>
 
       {/* Upload / Edit Form Panel */}
@@ -766,16 +936,11 @@ export function DocumentVaultTab({
                       {!ai.confirmedByUser && (
                         <button
                           type="button"
-                          disabled={confirmingDocId === doc.id}
-                          onClick={() => handleConfirmAiExtraction(doc)}
+                          onClick={() => void openReviewForDoc(doc)}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#191919] dark:bg-[#E7E9EA] text-white dark:text-[#000000] text-xs font-semibold cursor-pointer"
                         >
-                          {confirmingDocId === doc.id ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <ShieldCheck className="w-3.5 h-3.5" />
-                          )}
-                          Apply &amp; Confirm Extracted Fields
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          Review &amp; confirm fields
                         </button>
                       )}
                     </div>
