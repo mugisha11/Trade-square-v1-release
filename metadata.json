@@ -1,0 +1,6 @@
+{
+  "name": "TradeSquare",
+  "description": "An intelligent business network helping African enterprises discover buyers, suppliers, and commercial opportunities across regional markets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

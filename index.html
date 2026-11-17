@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TradeSquare — Find the right partners. Build beyond borders.</title>
+    <meta
+      name="description"
+      content="TradeSquare is building an intelligent business network that helps African enterprises discover buyers, suppliers and opportunities across regional markets."
+    />
+    <meta property="og:title" content="TradeSquare — Find the right partners. Build beyond borders." />
+    <meta
+      property="og:description"
+      content="Africa has the businesses. Let's connect them to the opportunities."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('tradesquare_theme');
+          if (t === 'dark') {
+            document.documentElement.classList.add('dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
+            document.documentElement.style.colorScheme = 'dark';
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#F5F5F7] text-[#1D1D1F] dark:bg-[#000000] dark:text-[#E7E9EA] antialiased selection:bg-[#0071E3] dark:selection:bg-[#1D9BF0] selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
