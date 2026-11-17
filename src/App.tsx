@@ -10,6 +10,7 @@ import { JoinNetworkSection } from './components/JoinNetworkSection';
 import { Footer } from './components/Footer';
 import { AuthPage } from './components/AuthPage';
 import { AuthenticatedWorkspace } from './components/app/AuthenticatedWorkspace';
+import { readApiJson } from './lib/apiBase';
 import { authFetch, setStoredSessionToken } from './lib/authClient';
 import { REGIONAL_CORRIDORS } from './data/networkData';
 import type { SessionPayload, WorkspacePage } from './types/workspace';
@@ -103,7 +104,11 @@ export default function App() {
           }
           return null;
         }
-        const data = await res.json();
+        const data = await readApiJson<{
+          authenticated?: boolean;
+          user?: SessionPayload['user'];
+          business?: SessionPayload['business'];
+        }>(res);
         if (data?.authenticated && data.user && data.business) {
           return { user: data.user, business: data.business } as SessionPayload;
         }

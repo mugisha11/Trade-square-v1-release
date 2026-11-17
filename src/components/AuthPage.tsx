@@ -8,7 +8,8 @@ import {
   Loader2,
   ShieldCheck,
 } from 'lucide-react';
-import { setStoredSessionToken } from '../lib/authClient';
+import { readApiJson } from '../lib/apiBase';
+import { authFetch, setStoredSessionToken } from '../lib/authClient';
 import type { SessionPayload } from '../types/workspace';
 import { Footer } from './Footer';
 import { ThemeToggleButton } from './ThemeToggle';
@@ -135,16 +136,24 @@ export function AuthPage({
               password,
             };
 
-      const res = await fetch(endpoint, {
+      const res = await authFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = await readApiJson<{
+        error?: string;
+        sessionToken?: string;
+        user?: SessionPayload['user'];
+        business?: SessionPayload['business'];
+      }>(res);
       if (!res.ok) {
         throw new Error(
-          data.error || (mode === 'signup' ? 'Unable to create account.' : 'Unable to log in.')
+          data.error || (mode === 'signup' ? 'Unable to create account.' : 'Unable to log in.'),
         );
+      }
+      if (!data.user || !data.business) {
+        throw new Error('Authentication succeeded but the session payload was incomplete.');
       }
 
       setStoredSessionToken(data.sessionToken ?? null);
@@ -154,7 +163,12 @@ export function AuthPage({
         sessionToken: data.sessionToken,
       });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Unable to complete authentication.');
+      const message = err instanceof Error ? err.message : 'Unable to complete authentication.';
+      setError(
+        message.includes('Unexpected token') || message.includes('<!DOCTYPE')
+          ? 'TradeSquare API is not connected on this deployment. Redeploy with the Netlify /api function enabled.'
+          : message,
+      );
     } finally {
       setSubmitting(false);
     }

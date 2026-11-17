@@ -1,3 +1,5 @@
+import { resolveApiUrl } from './apiBase';
+
 const SESSION_STORAGE_KEY = 'ts_session_token';
 
 export function getStoredSessionToken(): string | null {
@@ -26,9 +28,17 @@ export function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Pro
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  return fetch(input, {
+
+  const resolved =
+    typeof input === 'string'
+      ? resolveApiUrl(input)
+      : input instanceof URL
+        ? resolveApiUrl(input.toString())
+        : input;
+
+  return fetch(resolved, {
     ...init,
     headers,
-    credentials: init.credentials ?? 'same-origin',
+    credentials: init.credentials ?? 'include',
   });
 }

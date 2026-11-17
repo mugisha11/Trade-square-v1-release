@@ -567,8 +567,30 @@ let cachedRegionalAnalysis: {
   };
 } | null = null;
 
-async function startServer() {
+export type CreateAppOptions = {
+  /** When false, only API routes are mounted (Netlify Functions / external API host). */
+  serveFrontend?: boolean;
+};
+
+export async function createApp(options: CreateAppOptions = {}) {
+  const serveFrontend = options.serveFrontend !== false;
   const app = express();
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   app.use(express.json({ limit: '25mb' }));
 
   app.get('/api/health', (_req, res) => {
@@ -3095,29 +3117,41 @@ async function startServer() {
     }
   });
 
-  if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      const indexPath = path.join(distDir, 'index.html');
-      if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
-      } else {
-        res.status(404).send('Build output not found.');
-      }
-    });
+  if (serveFrontend) {
+    if (!isProduction) {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distDir = path.resolve(__dirname, 'dist');
+      app.use(express.static(distDir));
+      app.get('*', (_req, res) => {
+        const indexPath = path.join(distDir, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(404).send('Build output not found.');
+        }
+      });
+    }
   }
 
+  return app;
+}
+
+async function startServer() {
+  const app = await createApp({ serveFrontend: true });
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`TradeSquare server listening on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+const isNetlifyFunction =
+  Boolean(process.env.NETLIFY) || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+
+if (!isNetlifyFunction) {
+  startServer();
+}
